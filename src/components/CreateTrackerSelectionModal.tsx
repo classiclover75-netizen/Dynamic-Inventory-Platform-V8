@@ -32,7 +32,14 @@ export const CreateTrackerSelectionModal: React.FC<
 
   const getImageUrl = (val: any) => {
     if (!val) return "";
-    const imgData = typeof val === "object" && val !== null ? val.data : val;
+    let data = val;
+    if (Array.isArray(val) && val.length > 0) {
+      data = val[0];
+    }
+    const imgData =
+      typeof data === "object" && data !== null
+        ? data.data || data.url || data.name
+        : data;
     if (!imgData) return "";
     if (
       typeof imgData === "string" &&
@@ -243,15 +250,26 @@ export const CreateTrackerSelectionModal: React.FC<
                         key={c.key}
                         className="p-2 border whitespace-pre-wrap break-words min-w-[150px]"
                       >
-                        {c.type === "image" && rawVal ? (
+                        {(c.type === "image" || c.type === "file") &&
+                        rawVal &&
+                        getImageUrl(rawVal) ? (
                           <img
                             src={getImageUrl(rawVal)}
                             className="h-10 w-10 object-contain mx-auto rounded"
                             alt="img"
+                            onError={(e) => {
+                              // If image fails to load, maybe it's not an image file (e.g. PDF)
+                              (e.target as HTMLImageElement).style.display =
+                                "none";
+                            }}
                           />
                         ) : (
                           highlightText(
-                            String(rawVal || ""),
+                            String(
+                              rawVal === null || rawVal === undefined
+                                ? ""
+                                : rawVal,
+                            ),
                             deferredSearchQuery,
                           )
                         )}
