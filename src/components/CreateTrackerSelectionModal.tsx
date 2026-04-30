@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Modal } from './ui';
 import { Column } from '../types';
+import { ArrowLeft, LayoutList } from 'lucide-react';
 
 interface CreateTrackerSelectionModalProps {
   isOpen: boolean;
@@ -44,8 +45,8 @@ export const CreateTrackerSelectionModal: React.FC<CreateTrackerSelectionModalPr
   const availableColumnsCount = sourceColumns.filter(c => c.key !== 'sr').length;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`⚡ Create Linked Tracker (${sourcePage})`} width="max-w-4xl" noScroll={true}>
-      <div className="flex flex-col h-[70vh] p-4">
+    <Modal isOpen={isOpen} onClose={onClose} title={`⚡ Create Linked Tracker (${sourcePage})`} width="95vw" noScroll={true}>
+      <div className="flex flex-col h-[85vh] p-4">
         
         <div className="flex flex-col gap-2 mb-4 shrink-0 p-3 bg-gray-50 rounded-lg border border-gray-200">
           <div className="flex items-center gap-3">
@@ -66,8 +67,8 @@ export const CreateTrackerSelectionModal: React.FC<CreateTrackerSelectionModalPr
             </div>
           </div>
           <p className="text-sm text-gray-500 mt-1">
-            Choose which columns to include in the Live Tracker. <b>Row No.</b> is always included. 
-            <b> Total Qty</b> and <b>Remaining Qty</b> will be automatically appended.
+            Choose which columns from <b>{sourcePage}</b> you want to include in the new Live Tracker. 
+            "Row No." is always included. "Total Qty" and "Remaining Qty" will be added automatically.
           </p>
         </div>
 
@@ -78,7 +79,7 @@ export const CreateTrackerSelectionModal: React.FC<CreateTrackerSelectionModalPr
                 <th className="p-2 border w-10 text-center">
                   <input 
                     type="checkbox" 
-                    className="cursor-pointer accent-[#2b579a]"
+                    className="cursor-pointer"
                     checked={selectedColKeys.length === availableColumnsCount && availableColumnsCount > 0}
                     onChange={(e) => {
                       if (e.target.checked) handleSelectAll();
@@ -86,8 +87,12 @@ export const CreateTrackerSelectionModal: React.FC<CreateTrackerSelectionModalPr
                     }} 
                   />
                 </th>
-                <th className="p-2 border text-left">Column Name</th>
-                <th className="p-2 border text-left">Data Type</th>
+                <th className="p-2 border text-left">
+                  <div className="flex items-center gap-1">Column Name</div>
+                </th>
+                <th className="p-2 border text-left">
+                  <div className="flex items-center gap-1">Data Type</div>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -98,23 +103,30 @@ export const CreateTrackerSelectionModal: React.FC<CreateTrackerSelectionModalPr
                     <td className="p-2 border text-center">
                       <input 
                         type="checkbox" 
-                        className={`cursor-pointer ${col.key === 'sr' ? 'accent-gray-400' : 'accent-[#2b579a]'}`}
+                        className="cursor-pointer"
                         checked={isSelected}
                         disabled={col.key === 'sr'}
                         onChange={() => handleToggle(col.key)} 
                       />
                     </td>
-                    <td className="p-2 border text-gray-800">
-                      <div className="flex items-center gap-1 font-medium">
-                         {idx + 1}. {col.name} {col.key === 'sr' && <span className="text-xs italic text-gray-500 ml-1">🔒 Locked</span>}
+                    <td className="p-2 border whitespace-pre-wrap break-words min-w-[150px]">
+                      <div className="flex items-center gap-1">
+                         {idx + 1}. {col.name} {col.key === 'sr' && '🔒'}
                       </div>
                     </td>
-                    <td className="p-2 border text-gray-600 capitalize">
+                    <td className="p-2 border whitespace-pre-wrap break-words min-w-[150px] capitalize">
                       {col.type.replace('_', ' ')}
                     </td>
                   </tr>
                 );
               })}
+              {sourceColumns.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="p-4 text-center text-gray-500 font-medium">
+                    No columns available.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -125,15 +137,15 @@ export const CreateTrackerSelectionModal: React.FC<CreateTrackerSelectionModalPr
           </span>
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose} className="flex items-center gap-2">
-               Cancel
+              <ArrowLeft size={16} /> Cancel
             </Button>
             <Button 
               variant="dark" 
               onClick={() => onConfirm(selectedColKeys)} 
-              className="flex items-center gap-2 !bg-[#2b579a] hover:!bg-[#1a3c6d] text-white"
+              className="flex items-center gap-2"
               disabled={selectedColKeys.length === 0 && sourceColumns.length > 1}
             >
-               ⚡ Create Linked Tracker
+              <LayoutList size={16} /> ⚡ Create Linked Tracker
             </Button>
           </div>
         </div>
