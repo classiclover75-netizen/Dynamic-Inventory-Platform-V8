@@ -44,6 +44,7 @@ import { DuplicateFinderModal } from "./components/DuplicateFinderModal";
 import { GlobalCombinationCopyBoxes } from "./components/GlobalCombinationCopyBoxes";
 import { GlobalCopyBoxesSettingsModal } from "./components/GlobalCopyBoxesSettingsModal";
 import { RowNoResizeModal } from "./components/RowNoResizeModal";
+import { CreateTrackerSelectionModal } from "./components/CreateTrackerSelectionModal";
 import {
   AppState,
   Column,
@@ -116,6 +117,7 @@ function AppContent() {
   const [maxSearchHistory, setMaxSearchHistory] = useState(10);
   const [showHistoryLimitModal, setShowHistoryLimitModal] = useState(false);
   const [tempHistoryLimit, setTempHistoryLimit] = useState(10);
+  const [trackerSelectionModalSource, setTrackerSelectionModalSource] = useState<string | null>(null);
 
   const [localSettings, setLocalSettings] = useState({ ghostHighlight: false });
 
@@ -993,7 +995,7 @@ function AppContent() {
   const activeConfig = state.pageConfigs[state.activePage] || initialConfig;
   const activeRows = state.pageRows[state.activePage] || [];
 
-  const handleCreateTracker = async (sourcePage: string) => {
+  const handleCreateTracker = async (sourcePage: string, selectedColKeys?: string[]) => {
     const sourceConfig = state.pageConfigs[sourcePage];
     const sourceRows = state.pageRows[sourcePage] || [];
     if (!sourceConfig) return toast("Source page not found!");
@@ -1009,9 +1011,13 @@ function AppContent() {
       trackerName = `${baseTrackerName} (${trackerCounter})`;
     }
 
+    const filteredColumns = selectedColKeys 
+      ? sourceConfig.columns.filter(c => selectedColKeys.includes(c.key) || c.key === "sr")
+      : sourceConfig.columns;
+
     // EXACT COPY of ALL columns, appending only Total and Remaining
     const newColumns = [
-      ...sourceConfig.columns,
+      ...filteredColumns,
       { key: "total_qty", name: "Total Qty", type: "number" as const },
       {
         key: "remaining_qty",
@@ -1030,10 +1036,18 @@ function AppContent() {
     };
 
     // EXACT COPY of ALL row data, setting total_qty to '0'
-    const newRows = sourceRows.map((row) => ({
-      ...row,
-      total_qty: "0",
-    }));
+    const newRows = sourceRows.map((row) => {
+      const newRow = { ...row };
+      if (selectedColKeys) {
+        Object.keys(newRow).forEach(k => {
+           if (k !== 'id' && k !== 'sr' && !selectedColKeys.includes(k) && k !== 'total_qty' && k !== 'remaining_qty') {
+             delete newRow[k];
+           }
+        });
+      }
+      newRow.total_qty = "0";
+      return newRow;
+    });
 
     try {
       await fetch("/api/pages", {
@@ -4114,11 +4128,27 @@ function AppContent() {
         onClearPageData={() => handleClearPageData(state.activePage)}
         existingPages={state.pages}
         setConfirmationModal={setConfirmationModal}
-        onCreateTracker={handleCreateTracker}
+        onCreateTracker={(sourcePage) => {
+          setTrackerSelectionModalSource(sourcePage);
+          closeAllModals();
+        }}
         onConfigureCopyBoxes={() => {
           setReturnToSettings(true);
           toggleModal("activePageSettings", false);
           toggleModal("globalCopyBoxesSettings", true);
+        }}
+      />
+
+      <CreateTrackerSelectionModal
+        isOpen={!!trackerSelectionModalSource}
+        onClose={() => setTrackerSelectionModalSource(null)}
+        sourcePage={trackerSelectionModalSource || ""}
+        sourceColumns={trackerSelectionModalSource ? (state.pageConfigs[trackerSelectionModalSource]?.columns || []) : []}
+        onConfirm={(selectedColKeys) => {
+          if (trackerSelectionModalSource) {
+            handleCreateTracker(trackerSelectionModalSource, selectedColKeys);
+          }
+          setTrackerSelectionModalSource(null);
         }}
       />
 
