@@ -4144,6 +4144,7 @@ function AppContent() {
         onClose={() => setTrackerSelectionModalSource(null)}
         sourcePage={trackerSelectionModalSource || ""}
         sourceColumns={trackerSelectionModalSource ? (state.pageConfigs[trackerSelectionModalSource]?.columns || []) : []}
+        sourceRows={trackerSelectionModalSource ? (state.pageRows[trackerSelectionModalSource] || []) : []}
         onConfirm={(selectedColKeys) => {
           if (trackerSelectionModalSource) {
             handleCreateTracker(trackerSelectionModalSource, selectedColKeys);

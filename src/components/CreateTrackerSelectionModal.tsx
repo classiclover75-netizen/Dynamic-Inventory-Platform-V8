@@ -1,129 +1,272 @@
-import React, { useState, useEffect } from 'react';
-import { Button, Modal } from './ui';
-import { Column } from '../types';
-import { ArrowLeft, LayoutList } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useDeferredValue } from "react";
+import { Button, Modal, Input } from "./ui";
+import { Column, RowData } from "../types";
+import { ArrowLeft, LayoutList, Search } from "lucide-react";
 
 interface CreateTrackerSelectionModalProps {
   isOpen: boolean;
   onClose: () => void;
   sourcePage: string;
   sourceColumns: Column[];
+  sourceRows: RowData[];
   onConfirm: (selectedColKeys: string[]) => void;
 }
 
-export const CreateTrackerSelectionModal: React.FC<CreateTrackerSelectionModalProps> = ({
-  isOpen,
-  onClose,
-  sourcePage,
-  sourceColumns,
-  onConfirm,
-}) => {
-  const [selectedColKeys, setSelectedColKeys] = useState<string[]>([]);
+export const CreateTrackerSelectionModal: React.FC<
+  CreateTrackerSelectionModalProps
+> = ({ isOpen, onClose, sourcePage, sourceColumns, sourceRows, onConfirm }) => {
+  const [searchQuery, setSearchQuery] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const [selectedColumnKeys, setSelectedColumnKeys] = useState<Set<string>>(
+    new Set(),
+  );
 
   useEffect(() => {
     if (isOpen) {
-      // Pre-select all columns except 'sr' (which is selected by default and immutable)
-      setSelectedColKeys(sourceColumns.filter(c => c.key !== 'sr').map(c => c.key));
+      setSelectedColumnKeys(
+        new Set(sourceColumns.filter((c) => c.key !== "sr").map((c) => c.key)),
+      );
+      setSearchQuery("");
     }
   }, [isOpen, sourceColumns]);
 
-  const handleToggle = (key: string) => {
-    if (key === 'sr') return; // Cannot toggle 'sr'
-    setSelectedColKeys(prev =>
-      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+  const getImageUrl = (val: any) => {
+    if (!val) return "";
+    const imgData = typeof val === "object" && val !== null ? val.data : val;
+    if (!imgData) return "";
+    if (
+      typeof imgData === "string" &&
+      (imgData.startsWith("data:image") || /^https?:\/\//i.test(imgData))
+    ) {
+      return imgData;
+    }
+    return `/uploads/${imgData}`;
+  };
+
+  const getCellValue = (row: RowData, col: Column) => {
+    if (col.key === "sr") {
+      const rowIndex = sourceRows.findIndex((r) => r.id === row.id);
+      return String(rowIndex + 1);
+    }
+    if (col.key === "remaining_qty") {
+      const total = parseFloat(String(row.total_qty || 0)) || 0;
+      const saleCols = sourceColumns.filter((c) => c.type === "sale_tracker");
+      const totalSales = saleCols.reduce(
+        (sum, c) => sum + (parseFloat(String(row[c.key] || 0)) || 0),
+        0,
+      );
+      return String(total - totalSales);
+    }
+    if (col.type === "sale_tracker") {
+      return String(row[col.key] || "0");
+    }
+    return row[col.key] || "";
+  };
+
+  const exportColumns = useMemo(() => {
+    return sourceColumns.filter(
+      (c) => c.key === "sr" || selectedColumnKeys.has(c.key),
+    );
+  }, [sourceColumns, selectedColumnKeys]);
+
+  const highlightText = (text: string, query: string) => {
+    const cleanText = text
+      ? String(text)
+          .replace(/<[^>]*>/g, "")
+          .replace(/<br\s*\/?>/gi, " ")
+          .replace(/&nbsp;/gi, " ")
+      : "";
+    if (!query || !cleanText) return cleanText;
+    const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return cleanText;
+
+    const escapedStrings = tokens.map((t) => {
+      const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      let bStart = "";
+      let bEnd = "";
+      if (/^[0-9]/.test(t)) {
+        bStart = "(?<![0-9])";
+        bEnd = "";
+      } else if (/^[a-zA-Z]/.test(t)) {
+        if (t.length <= 2) {
+          bStart = "(?<![a-zA-Z])";
+          bEnd = "(?![a-zA-Z]{2,})";
+        } else {
+          bStart = "";
+          bEnd = "";
+        }
+      }
+      return bStart + escaped + bEnd;
+    });
+
+    const regex = new RegExp("(" + escapedStrings.join("|") + ")", "gi");
+    const parts = cleanText.split(regex);
+
+    return parts.map((part, i) =>
+      regex.test(part) ? (
+        <span
+          key={i}
+          className="bg-yellow-300 text-black font-bold px-[1px] rounded-sm"
+        >
+          {part}
+        </span>
+      ) : (
+        part
+      ),
     );
   };
 
-  const handleSelectAll = () => {
-    setSelectedColKeys(sourceColumns.filter(c => c.key !== 'sr').map(c => c.key));
-  };
+  const filteredRows = useMemo(() => {
+    if (!deferredSearchQuery) return sourceRows;
+    const tokens = deferredSearchQuery
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
 
-  const handleDeselectAll = () => {
-    setSelectedColKeys([]);
-  };
+    return sourceRows.filter((row) => {
+      const searchableValues = sourceColumns.map((col) => {
+        const val = getCellValue(row, col);
+        return val !== null && val !== undefined ? String(val) : "";
+      });
+      const blob = searchableValues
+        .join(" ")
+        .replace(/<[^>]*>/g, "")
+        .replace(/<br\s*\/?>/gi, " ")
+        .replace(/&nbsp;/gi, " ")
+        .toLowerCase();
 
-  const availableColumnsCount = sourceColumns.filter(c => c.key !== 'sr').length;
+      return tokens.every((t) => {
+        const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        return new RegExp(escaped, "i").test(blob);
+      });
+    });
+  }, [sourceRows, sourceColumns, deferredSearchQuery]);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`⚡ Create Linked Tracker (${sourcePage})`} width="95vw" noScroll={true}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={`⚡ Create Linked Tracker Preview (${sourcePage})`}
+      width="95vw"
+      noScroll={true}
+    >
       <div className="flex flex-col h-[85vh] p-4">
-        
+        <div className="flex gap-4 mb-4 shrink-0 items-center">
+          <div className="relative flex-1">
+            <Search
+              className="absolute left-2 top-2.5 text-gray-400"
+              size={16}
+            />
+            <Input
+              className="pl-8"
+              placeholder="Filter rows..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+        </div>
+
         <div className="flex flex-col gap-2 mb-4 shrink-0 p-3 bg-gray-50 rounded-lg border border-gray-200">
           <div className="flex items-center gap-3">
-            <span className="text-sm font-bold text-gray-700">Columns Setup:</span>
+            <span className="text-sm font-bold text-gray-700">
+              Tracker Columns:
+            </span>
             <div className="flex gap-2">
-              <button 
-                onClick={handleSelectAll}
+              <button
+                onClick={() =>
+                  setSelectedColumnKeys(
+                    new Set(
+                      sourceColumns
+                        .filter((c) => c.key !== "sr")
+                        .map((c) => c.key),
+                    ),
+                  )
+                }
                 className="px-2 py-1 text-[10px] font-bold bg-[#2b579a] text-white rounded hover:bg-[#1a3c6d] transition-colors"
               >
                 Select All
               </button>
-              <button 
-                onClick={handleDeselectAll}
+              <button
+                onClick={() => setSelectedColumnKeys(new Set())}
                 className="px-2 py-1 text-[10px] font-bold bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors border border-gray-300"
               >
                 Select None
               </button>
             </div>
           </div>
-          <p className="text-sm text-gray-500 mt-1">
-            Choose which columns from <b>{sourcePage}</b> you want to include in the new Live Tracker. 
-            "Row No." is always included. "Total Qty" and "Remaining Qty" will be added automatically.
-          </p>
+          <div className="flex flex-wrap gap-x-4 gap-y-2 mt-1">
+            {sourceColumns
+              .filter((c) => c.key !== "sr")
+              .map((col) => (
+                <label
+                  key={col.key}
+                  className="flex items-center gap-1.5 cursor-pointer text-sm text-gray-600 hover:text-gray-900"
+                >
+                  <input
+                    type="checkbox"
+                    className="accent-[#2b579a] w-4 h-4 cursor-pointer"
+                    checked={selectedColumnKeys.has(col.key)}
+                    onChange={(e) => {
+                      const next = new Set(selectedColumnKeys);
+                      if (e.target.checked) next.add(col.key);
+                      else next.delete(col.key);
+                      setSelectedColumnKeys(next);
+                    }}
+                  />
+                  <span>{col.name}</span>
+                </label>
+              ))}
+          </div>
         </div>
 
         <div className="flex-1 overflow-auto border rounded relative bg-white">
           <table className="w-full text-sm border-collapse">
             <thead className="sticky top-0 bg-gray-100 z-10 shadow-sm">
               <tr>
-                <th className="p-2 border w-10 text-center">
-                  <input 
-                    type="checkbox" 
-                    className="cursor-pointer"
-                    checked={selectedColKeys.length === availableColumnsCount && availableColumnsCount > 0}
-                    onChange={(e) => {
-                      if (e.target.checked) handleSelectAll();
-                      else handleDeselectAll();
-                    }} 
-                  />
-                </th>
-                <th className="p-2 border text-left">
-                  <div className="flex items-center gap-1">Column Name</div>
-                </th>
-                <th className="p-2 border text-left">
-                  <div className="flex items-center gap-1">Data Type</div>
-                </th>
+                {exportColumns.map((c, i) => (
+                  <th key={c.key} className="p-2 border text-left">
+                    <div className="flex items-center gap-1">
+                      {i + 1}. {c.name} {c.locked && "🔒"}
+                    </div>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {sourceColumns.map((col, idx) => {
-                const isSelected = col.key === 'sr' || selectedColKeys.includes(col.key);
-                return (
-                  <tr key={col.key} className={isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}>
-                    <td className="p-2 border text-center">
-                      <input 
-                        type="checkbox" 
-                        className="cursor-pointer"
-                        checked={isSelected}
-                        disabled={col.key === 'sr'}
-                        onChange={() => handleToggle(col.key)} 
-                      />
-                    </td>
-                    <td className="p-2 border whitespace-pre-wrap break-words min-w-[150px]">
-                      <div className="flex items-center gap-1">
-                         {idx + 1}. {col.name} {col.key === 'sr' && '🔒'}
-                      </div>
-                    </td>
-                    <td className="p-2 border whitespace-pre-wrap break-words min-w-[150px] capitalize">
-                      {col.type.replace('_', ' ')}
-                    </td>
-                  </tr>
-                );
-              })}
-              {sourceColumns.length === 0 && (
+              {filteredRows.map((row) => (
+                <tr key={row.id} className="hover:bg-gray-50">
+                  {exportColumns.map((c) => {
+                    const rawVal = getCellValue(row, c);
+                    return (
+                      <td
+                        key={c.key}
+                        className="p-2 border whitespace-pre-wrap break-words min-w-[150px]"
+                      >
+                        {c.type === "image" && rawVal ? (
+                          <img
+                            src={getImageUrl(rawVal)}
+                            className="h-10 w-10 object-contain mx-auto rounded"
+                            alt="img"
+                          />
+                        ) : (
+                          highlightText(
+                            String(rawVal || ""),
+                            deferredSearchQuery,
+                          )
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+              {filteredRows.length === 0 && (
                 <tr>
-                  <td colSpan={3} className="p-4 text-center text-gray-500 font-medium">
-                    No columns available.
+                  <td
+                    colSpan={exportColumns.length}
+                    className="p-4 text-center text-gray-500 font-medium"
+                  >
+                    No data matches your search.
                   </td>
                 </tr>
               )}
@@ -133,25 +276,29 @@ export const CreateTrackerSelectionModal: React.FC<CreateTrackerSelectionModalPr
 
         <div className="flex justify-between items-center mt-4 pt-4 border-t sticky bottom-0 bg-white z-10 pb-2 shrink-0">
           <span className="text-xs font-bold text-gray-500 bg-gray-100 px-3 py-1.5 rounded-md">
-            {selectedColKeys.length} active columns
+            {exportColumns.length} active columns
           </span>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={onClose} className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={onClose}
+              className="flex items-center gap-2"
+            >
               <ArrowLeft size={16} /> Cancel
             </Button>
-            <Button 
-              variant="dark" 
-              onClick={() => onConfirm(selectedColKeys)} 
-              className="flex items-center gap-2"
-              disabled={selectedColKeys.length === 0 && sourceColumns.length > 1}
+            <Button
+              variant="dark"
+              onClick={() => onConfirm(Array.from(selectedColumnKeys))}
+              className="flex items-center gap-2 !bg-[#2b579a] hover:!bg-[#1a3c6d] text-white"
+              disabled={
+                selectedColumnKeys.size === 0 && sourceColumns.length > 1
+              }
             >
               <LayoutList size={16} /> ⚡ Create Linked Tracker
             </Button>
           </div>
         </div>
-
       </div>
     </Modal>
   );
 };
-
