@@ -612,15 +612,12 @@ app.delete('/api/pages/:name', async (req, res) => {
   try {
     const { name } = req.params;
     if (isUsingMongoDB) {
-      const oldPageRows = await PageRow.find({ pageName: name });
-      cleanupOrphanImages(oldPageRows.map(r => r.data), []);
       await Page.findOneAndDelete({ name });
       await PageRow.deleteMany({ pageName: name });
     } else {
       const db = await getLocalDB();
       const page = db.pages.find((p: any) => p.name === name);
       if (page) {
-        cleanupOrphanImages(page.rows || [], []);
         db.pages = db.pages.filter((p: any) => p.name !== name);
       }
       await saveLocalDB(db);
@@ -659,8 +656,6 @@ app.put('/api/pageRows/:name', async (req, res) => {
       const oldRows = oldPageRows.map(r => r.data);
       const newRows = await processRowsConcurrently(rows || [], 50, forceSave);
       
-      cleanupOrphanImages(oldRows, newRows);
-      
       await PageRow.deleteMany({ pageName: name });
       if (newRows.length > 0) {
         await PageRow.insertMany(newRows.map((row: any) => ({ pageName: name, data: row })));
@@ -671,7 +666,6 @@ app.put('/api/pageRows/:name', async (req, res) => {
       if (page) {
         const oldRows = page.rows || [];
         const newRows = await processRowsConcurrently(rows || [], 50, forceSave);
-        cleanupOrphanImages(oldRows, newRows);
         page.rows = newRows;
       }
       await saveLocalDB(db);
@@ -701,8 +695,6 @@ app.patch('/api/pageRows/:name/:rowId', async (req, res) => {
       const newRowData = { ...rowToUpdate.data, ...updates };
       const processedRow = await processRowImages(newRowData, forceSave);
 
-      cleanupOrphanImages([rowToUpdate.data], [processedRow]);
-
       await PageRow.findByIdAndUpdate(rowToUpdate._id, { data: processedRow });
     } else {
       const db = await getLocalDB();
@@ -716,8 +708,6 @@ app.patch('/api/pageRows/:name/:rowId', async (req, res) => {
 
       const newRowData = { ...page.rows[idx], ...updates };
       const processedRow = await processRowImages(newRowData, forceSave);
-
-      cleanupOrphanImages([page.rows[idx]], [processedRow]);
 
       page.rows[idx] = processedRow;
       await saveLocalDB(db);
@@ -777,7 +767,6 @@ app.delete('/api/pageRows/:name/:rowId', async (req, res) => {
       if (!rowToDelete) {
         return res.status(404).json({ error: 'Row not found' });
       }
-      cleanupOrphanImages([rowToDelete.data], []);
       await PageRow.findByIdAndDelete(rowToDelete._id);
     } else {
       const db = await getLocalDB();
@@ -785,7 +774,6 @@ app.delete('/api/pageRows/:name/:rowId', async (req, res) => {
       if (!page) return res.status(404).json({ error: 'Page not found' });
       const rowToDelete = page.rows?.find((r: any) => String(r.id) === String(rowId));
       if (rowToDelete) {
-        cleanupOrphanImages([rowToDelete], []);
         page.rows = page.rows.filter((r: any) => String(r.id) !== String(rowId));
         await saveLocalDB(db);
       }

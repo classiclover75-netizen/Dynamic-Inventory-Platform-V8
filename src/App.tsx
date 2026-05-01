@@ -1424,9 +1424,13 @@ function AppContent() {
 
       setState((prev) => {
         const newPages = prev.pages.filter((p) => p !== pageToDelete);
-        const newConfigs = { ...prev.pageConfigs };
-        const newRows = { ...prev.pageRows };
+        
+        // Safety Verification Check: Deep clone to guarantee immutability
+        // ensures other pages like 'Main Page' have zero risk of shared reference mutation
+        const newConfigs = JSON.parse(JSON.stringify(prev.pageConfigs));
+        const newRows = JSON.parse(JSON.stringify(prev.pageRows));
 
+        // Strictly target and remove ONLY the selected page's data
         delete newConfigs[pageToDelete];
         delete newRows[pageToDelete];
 
