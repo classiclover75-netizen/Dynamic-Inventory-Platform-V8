@@ -995,6 +995,62 @@ function AppContent() {
   const activeConfig = state.pageConfigs[state.activePage] || initialConfig;
   const activeRows = state.pageRows[state.activePage] || [];
 
+  const handleSyncTracker = async (trackerName: string) => {
+    try {
+      const trackerConfig = state.pageConfigs[trackerName];
+      if (!trackerConfig || !trackerConfig.linkedSourcePage) return;
+      
+      const sourcePage = trackerConfig.linkedSourcePage;
+      const sourceRows = state.pageRows[sourcePage] || [];
+      const trackerRows = state.pageRows[trackerName] || [];
+      
+      const trackerRowsMap = new Map();
+      for (const tr of trackerRows) {
+        if (tr.id) trackerRowsMap.set(String(tr.id), tr);
+      }
+      
+      const repairedTrackerRows = sourceRows.map((sr: any) => {
+        const existingTr = trackerRowsMap.get(String(sr.id));
+        if (existingTr) {
+          const trackerKeysToKeep = [
+            "total_qty",
+            "remaining_qty",
+            ...trackerConfig.columns
+              .filter((c: any) => c.type === "sale_tracker")
+              .map((c: any) => c.key),
+          ];
+          const preservedData: any = {};
+          for (const k of trackerKeysToKeep) {
+            if (k in existingTr) preservedData[k] = existingTr[k];
+          }
+          return { ...sr, ...preservedData };
+        } else {
+          return { ...sr, total_qty: "0" };
+        }
+      });
+
+      setState((prev) => ({
+        ...prev,
+        pageRows: { ...prev.pageRows, [trackerName]: repairedTrackerRows },
+      }));
+
+      const response = await fetch(
+        `/api/pageRows/${encodeURIComponent(trackerName)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: repairedTrackerRows }),
+        }
+      );
+      if (!response.ok) throw new Error("Failed to sync to server");
+      
+      toast("Tracker synced successfully!");
+    } catch (err) {
+      console.error("Sync error:", err);
+      toast("Failed to sync tracker.");
+    }
+  };
+
   const handleCreateTracker = async (sourcePage: string, selectedColKeys?: string[]) => {
     const sourceConfig = state.pageConfigs[sourcePage];
     const sourceRows = state.pageRows[sourcePage] || [];
@@ -1075,57 +1131,7 @@ function AppContent() {
     }
   };
 
-  const handleSyncTracker = async (trackerName: string) => {
-    const config = state.pageConfigs[trackerName];
-    if (!config || !config.linkedSourcePage) return;
-    const sourceRows = state.pageRows[config.linkedSourcePage] || [];
-    const trackerRows = state.pageRows[trackerName] || [];
-    const trackerKeys = new Set(trackerRows.map((r) => r.id));
 
-    const newRowsToAppend: RowData[] = [];
-    sourceRows.forEach((row) => {
-      if (!trackerKeys.has(row.id)) {
-        const textCols =
-          state.pageConfigs[config.linkedSourcePage!]?.columns.filter(
-            (c) => c.type === "text",
-          ) || [];
-        const itemNameKey =
-          textCols.length > 0
-            ? textCols[0].key
-            : Object.keys(row).find(
-                (k) => typeof row[k] === "string" && k !== "id",
-              ) || "id";
-        newRowsToAppend.push({
-          id: row.id,
-          item_name: row[itemNameKey] || `Item ${row.id}`,
-          total_qty: "0",
-        });
-      }
-    });
-
-    if (newRowsToAppend.length > 0) {
-      const updatedRows = [...trackerRows, ...newRowsToAppend];
-      try {
-        await fetch(`/api/pageRows/${encodeURIComponent(trackerName)}/append`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rows: newRowsToAppend }),
-        });
-        setState((prev) => ({
-          ...prev,
-          pageRows: {
-            ...prev.pageRows,
-            [trackerName]: updatedRows,
-          },
-        }));
-        toast(`Synced ${newRowsToAppend.length} new items`);
-      } catch (e) {
-        toast("Failed to sync new items");
-      }
-    } else {
-      toast("Tracker is already up to date");
-    }
-  };
 
   const handleToggleColumnArchive = async (
     colKey: string,
@@ -4075,6 +4081,7 @@ function AppContent() {
         pageConfig={state.activePage ? activeConfig : null}
         onSave={handleSaveActivePageSettings}
         onDeleteColumn={handleDeleteColumnOptions}
+        onSyncTracker={handleSyncTracker}
         onRenamePage={() => {
           setReturnToSettings(true);
           toggleModal("activePageSettings", false);

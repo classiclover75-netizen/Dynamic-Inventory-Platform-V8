@@ -942,7 +942,22 @@ app.put('/api/state', async (req, res) => {
           const repairedTrackerRows = sourceRows.map((sr: any) => {
             const existingTr = trackerRowsMap.get(String(sr.id));
             if (existingTr) {
-              return { ...sr, ...existingTr };
+              const trackerKeysToKeep = [
+                "total_qty",
+                "remaining_qty"
+              ];
+              if (Array.isArray(config.columns)) {
+                config.columns.forEach((c: any) => {
+                  if (c.type === "sale_tracker" && c.key) {
+                    trackerKeysToKeep.push(c.key);
+                  }
+                });
+              }
+              const preservedData: any = {};
+              for (const k of trackerKeysToKeep) {
+                if (k in existingTr) preservedData[k] = existingTr[k];
+              }
+              return { ...sr, ...preservedData };
             } else {
               return { ...sr, total_qty: "0" };
             }

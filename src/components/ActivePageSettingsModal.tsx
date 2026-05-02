@@ -26,6 +26,7 @@ export const ActivePageSettingsModal = React.memo(({
   onFindDuplicates,
   onClearPageData,
   onCreateTracker,
+  onSyncTracker,
   onConfigureCopyBoxes,
   existingPages,
   setConfirmationModal
@@ -49,6 +50,7 @@ export const ActivePageSettingsModal = React.memo(({
   onFindDuplicates: () => void;
   onClearPageData: () => void;
   onCreateTracker?: (sourcePage: string) => void;
+  onSyncTracker?: (trackerName: string) => void;
   onConfigureCopyBoxes: () => void;
   existingPages: string[];
   setConfirmationModal: (modal: { isOpen: boolean, title?: string, message?: string, onConfirm: () => void } | null) => void;
@@ -292,6 +294,16 @@ export const ActivePageSettingsModal = React.memo(({
           <p className="text-[11px] text-gray-600 mb-2 leading-tight">Create a linked Live Tracker page with a 100% exact copy of current columns and data.</p>
           <Button variant="green" className="w-full text-xs py-1.5" onClick={() => { onCreateTracker(activePage); onClose(); }}>
              ⚡ Create Linked Live Tracker
+          </Button>
+        </div>
+      )}
+
+      {pageConfig?.isTrackerPage && onSyncTracker && (
+        <div className="mt-4 border-t border-[#eceff1] pt-3 mb-3">
+          <div className="text-[11px] font-bold text-[#2b579a] mb-1.5 uppercase tracking-wide flex items-center gap-1">🔄 Manual Sync</div>
+          <p className="text-[11px] text-gray-600 mb-2 leading-tight">Manually sync this tracker page with its source page. This fixes missing entries and ensures data is an exact match.</p>
+          <Button variant="blue" className="w-full text-xs py-1.5" onClick={() => { onSyncTracker(activePage); onClose(); }}>
+             🔄 Repair & Sync Tracker Now
           </Button>
         </div>
       )}
