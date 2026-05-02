@@ -743,10 +743,21 @@ app.put('/api/pageRows/:name', async (req, res) => {
     const { name } = req.params;
     const { rows } = req.body;
     const forceSave = req.query.force === 'true';
+    
+    let rowsToProcess = rows || [];
+    const seenIds = new Set<string>();
+    rowsToProcess = rowsToProcess.map((row: any) => {
+      if (!row.id || seenIds.has(String(row.id))) {
+        row.id = uuidv4();
+      }
+      seenIds.add(String(row.id));
+      return row;
+    });
+
     if (isUsingMongoDB) {
       const oldPageRows = await PageRow.find({ pageName: name });
       const oldRows = oldPageRows.map(r => r.data);
-      const newRows = await processRowsConcurrently(rows || [], 50, forceSave);
+      const newRows = await processRowsConcurrently(rowsToProcess, 50, forceSave);
       
       await PageRow.deleteMany({ pageName: name });
       if (newRows.length > 0) {
@@ -757,7 +768,7 @@ app.put('/api/pageRows/:name', async (req, res) => {
       const page = db.pages.find((p: any) => p.name === name);
       if (page) {
         const oldRows = page.rows || [];
-        const newRows = await processRowsConcurrently(rows || [], 50, forceSave);
+        const newRows = await processRowsConcurrently(rowsToProcess, 50, forceSave);
         page.rows = newRows;
       }
       await saveLocalDB(db);
@@ -903,7 +914,15 @@ app.put('/api/state', async (req, res) => {
     const imageProcessingCache = new Map<string, Promise<string>>(); // Deduplication cache across all pages
     if (newState.pageRows) {
       for (const pageName in newState.pageRows) {
-        processedPageRows[pageName] = await processRowsConcurrently(newState.pageRows[pageName], 50, true, imageProcessingCache);
+        const seenIds = new Set<string>();
+        const rowsToProcess = (newState.pageRows[pageName] || []).map((row: any) => {
+          if (!row.id || seenIds.has(String(row.id))) {
+            row.id = uuidv4();
+          }
+          seenIds.add(String(row.id));
+          return row;
+        });
+        processedPageRows[pageName] = await processRowsConcurrently(rowsToProcess, 50, true, imageProcessingCache);
       }
     }
 
