@@ -909,31 +909,46 @@ app.put('/api/state', async (req, res) => {
   try {
     const newState = req.body;
     
+    // Fix duplicate IDs across all pages first
+    if (newState.pageRows) {
+      for (const pageName in newState.pageRows) {
+        const seenIds = new Set<string>();
+        newState.pageRows[pageName] = (newState.pageRows[pageName] || []).map((row: any) => {
+          if (!row.id || seenIds.has(String(row.id))) {
+            row.id = uuidv4();
+          }
+          seenIds.add(String(row.id));
+          return row;
+        });
+      }
+    }
+
     // Repair tracker rows from source pages before processing
     if (newState.pageConfigs && newState.pageRows) {
       for (const [trackerName, trackerConfig] of Object.entries(newState.pageConfigs)) {
         const config = trackerConfig as any;
         if (config.linkedSourcePage && newState.pageRows[config.linkedSourcePage]) {
           const sourceRows = newState.pageRows[config.linkedSourcePage];
-          // Use the first occurrence of an ID to build the map, in case of duplicates
-          const sourceRowsMap = new Map();
-          for (const r of sourceRows) {
-             if (r.id && !sourceRowsMap.has(String(r.id))) {
-                 sourceRowsMap.set(String(r.id), r);
-             }
+          
+          if (!newState.pageRows[trackerName]) {
+            newState.pageRows[trackerName] = [];
           }
           
-          if (newState.pageRows[trackerName]) {
-            newState.pageRows[trackerName] = newState.pageRows[trackerName].map((trackerRow: any) => {
-              if (trackerRow.id) {
-                const sourceRow = sourceRowsMap.get(String(trackerRow.id));
-                if (sourceRow) {
-                  return { ...sourceRow, ...trackerRow };
-                }
-              }
-              return trackerRow;
-            });
+          const trackerRowsMap = new Map();
+          for (const tr of newState.pageRows[trackerName]) {
+            if (tr.id) trackerRowsMap.set(String(tr.id), tr);
           }
+          
+          const repairedTrackerRows = sourceRows.map((sr: any) => {
+            const existingTr = trackerRowsMap.get(String(sr.id));
+            if (existingTr) {
+              return { ...sr, ...existingTr };
+            } else {
+              return { ...sr, total_qty: "0" };
+            }
+          });
+          
+          newState.pageRows[trackerName] = repairedTrackerRows;
         }
       }
     }
@@ -943,15 +958,7 @@ app.put('/api/state', async (req, res) => {
     const imageProcessingCache = new Map<string, Promise<string>>(); // Deduplication cache across all pages
     if (newState.pageRows) {
       for (const pageName in newState.pageRows) {
-        const seenIds = new Set<string>();
-        const rowsToProcess = (newState.pageRows[pageName] || []).map((row: any) => {
-          if (!row.id || seenIds.has(String(row.id))) {
-            row.id = uuidv4();
-          }
-          seenIds.add(String(row.id));
-          return row;
-        });
-        processedPageRows[pageName] = await processRowsConcurrently(rowsToProcess, 50, true, imageProcessingCache);
+        processedPageRows[pageName] = await processRowsConcurrently(newState.pageRows[pageName], 50, true, imageProcessingCache);
       }
     }
 
