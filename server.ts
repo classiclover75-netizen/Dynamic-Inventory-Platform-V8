@@ -80,11 +80,13 @@ async function saveLocalDB(data: any) {
 }
 
 // Image Helpers
-async function processRowImages(row: any, forceSave = false, imageProcessingCache?: Map<string, Promise<string>>) {
+async function processRowImages(row: any, forceSave = false, providedCache?: Map<string, Promise<string>>) {
   const newRow = { ...row };
   const writePromises: Promise<void>[] = [];
+  const safeId = row.id ? String(row.id).replace(/[^a-zA-Z0-9_\-]/g, '') : uuidv4();
 
   for (const key in newRow) {
+    if (key === 'id') continue;
     const value = newRow[key];
     let imgVal = value;
     const isObject = typeof value === 'object' && value !== null && typeof value.data === 'string';
@@ -93,147 +95,103 @@ async function processRowImages(row: any, forceSave = false, imageProcessingCach
     }
 
     if (typeof imgVal === 'string') {
-      if (/^[a-zA-Z0-9_\-\.]+\.(png|jpg|jpeg|webp|gif|avif|tiff)$/i.test(imgVal)) {
-        if (fs.existsSync(path.join(UPLOADS_DIR, imgVal))) {
-          continue; 
-        }
-      }
+      let isImage = false;
+      let shouldProcess = false;
 
-      if (/^https?:\/\//i.test(imgVal)) {
+      if (/^[a-zA-Z0-9_\-\.]+\.(png|jpg|jpeg|webp|gif|avif|tiff)$/i.test(imgVal)) {
+        isImage = true;
+        if (imgVal.startsWith(`${safeId}_`) && fs.existsSync(path.join(UPLOADS_DIR, imgVal))) {
+          continue; 
+        } else if (fs.existsSync(path.join(UPLOADS_DIR, imgVal))) {
+          shouldProcess = true;
+        }
+      } else if (/^https?:\/\//i.test(imgVal)) {
+        isImage = true;
         if (imgVal.includes('/uploads/')) {
           const matchedFilename = imgVal.split('/uploads/').pop()?.split('?')[0];
           if (matchedFilename && fs.existsSync(path.join(UPLOADS_DIR, matchedFilename))) {
-             newRow[key] = isObject ? { ...value, data: matchedFilename } : matchedFilename;
-             continue;
+             if (matchedFilename.startsWith(`${safeId}_`)) {
+               newRow[key] = isObject ? { ...value, data: matchedFilename } : matchedFilename;
+               continue;
+             } else {
+               imgVal = matchedFilename; // Switch to treating it as local file
+               shouldProcess = true;
+             }
+          } else {
+             shouldProcess = true;
           }
-        }
-        
-        if (imageProcessingCache && imageProcessingCache.has(imgVal)) {
-          writePromises.push((async () => {
-            try {
-              const filename = await imageProcessingCache.get(imgVal);
-              newRow[key] = isObject ? { ...value, data: filename } : filename;
-            } catch (err) {
-              console.error(`Failed to get cached URL image ${imgVal}:`, err);
-            }
-          })());
         } else {
-          const processPromise = (async () => {
+          shouldProcess = true;
+        }
+      } else if (imgVal.startsWith('data:image/')) {
+        isImage = true;
+        shouldProcess = true;
+      }
+
+      if (isImage && shouldProcess) {
+        const processPromise = (async () => {
+          let buffer: Buffer | null = null;
+          let ext = 'jpg';
+
+          if (imgVal.startsWith('data:image/')) {
+            const parts = imgVal.split(';base64,');
+            const mimeType = parts[0].replace('data:image/', '');
+            ext = mimeType.split('+')[0];
+            if (ext === 'jpeg') ext = 'jpg';
+            if (!ext) ext = 'png';
+            buffer = Buffer.from(parts[1], 'base64');
+          } else if (/^[a-zA-Z0-9_\-\.]+\.(png|jpg|jpeg|webp|gif|avif|tiff)$/i.test(imgVal)) {
+            buffer = await fs.promises.readFile(path.join(UPLOADS_DIR, imgVal));
+            ext = imgVal.split('.').pop() || 'jpg';
+          } else if (/^https?:\/\//i.test(imgVal)) {
             const response = await fetch(imgVal);
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const arrayBuffer = await response.arrayBuffer();
-            let buffer = Buffer.from(arrayBuffer);
-            let ext = 'jpg';
-            
+            buffer = Buffer.from(arrayBuffer);
             const contentType = response.headers.get('content-type');
             if (contentType) {
                if (contentType.includes('png')) ext = 'png';
                else if (contentType.includes('gif')) ext = 'gif';
                else if (contentType.includes('webp')) ext = 'webp';
             }
+          }
 
-            let skipSharp = false;
-            if (buffer.byteLength <= 100 * 1024 && forceSave) {
-              skipSharp = true;
-            }
+          if (!buffer) throw new Error('Could not resolve image buffer');
 
-            if (!skipSharp) {
-              try {
-                const metadata = await sharp(buffer).metadata();
-                if (buffer.byteLength > 300 * 1024 || (metadata.width && metadata.width > 1200) || (metadata.height && metadata.height > 1200)) {
-                  buffer = await sharp(buffer)
-                    .resize({ width: 1200, height: 1200, fit: 'inside', withoutEnlargement: true })
-                    .jpeg({ quality: 80 })
-                    .toBuffer();
-                  ext = 'jpg';
-                }
-              } catch (sharpError) {
-                if (!forceSave) throw new Error('SHARP_UNSUPPORTED_FORMAT');
-                console.error(`Sharp processing failed for ${imgVal}:`, sharpError);
+          let skipSharp = false;
+          if (buffer.byteLength <= 100 * 1024 && forceSave) skipSharp = true;
+
+          if (!skipSharp) {
+            try {
+              const metadata = await sharp(buffer).metadata();
+              if (buffer.byteLength > 300 * 1024 || (metadata.width && metadata.width > 1200) || (metadata.height && metadata.height > 1200)) {
+                buffer = await sharp(buffer)
+                  .resize({ width: 1200, height: 1200, fit: 'inside', withoutEnlargement: true })
+                  .jpeg({ quality: 80 })
+                  .toBuffer();
+                ext = 'jpg';
               }
+            } catch (sharpError) {
+              if (!forceSave) throw new Error('SHARP_UNSUPPORTED_FORMAT');
+              console.error("Sharp error", sharpError);
             }
-            
-            const filename = `${uuidv4()}.${ext}`;
-            const filepath = path.join(UPLOADS_DIR, filename);
-            await fs.promises.writeFile(filepath, buffer);
-            return filename;
-          })();
+          }
 
-          if (imageProcessingCache) imageProcessingCache.set(imgVal, processPromise);
+          const filename = `${safeId}_${uuidv4().substring(0,8)}.${ext}`;
+          const filepath = path.join(UPLOADS_DIR, filename);
+          await fs.promises.writeFile(filepath, buffer);
+          return filename;
+        })();
 
-          writePromises.push((async () => {
-            try {
-              const filename = await processPromise;
-              newRow[key] = isObject ? { ...value, data: filename } : filename;
-            } catch (err: any) {
-              if (imageProcessingCache) imageProcessingCache.delete(imgVal);
-              if (err.message === 'SHARP_UNSUPPORTED_FORMAT') throw err;
-              console.error(`Failed to process URL image ${imgVal}:`, err);
-            }
-          })());
-        }
-      } else if (imgVal.startsWith('data:image/')) {
-        const hashBase64 = imgVal; // Use the exact base64 data for deduplication
-
-        if (imageProcessingCache && imageProcessingCache.has(hashBase64)) {
-          writePromises.push((async () => {
-            try {
-              const filename = await imageProcessingCache.get(hashBase64);
-              newRow[key] = isObject ? { ...value, data: filename } : filename;
-            } catch (err) {
-              console.error("Failed to get cached base64 image:", err);
-            }
-          })());
-        } else {
-          const processPromise = (async () => {
-            const parts = imgVal.split(';base64,');
-            const mimeType = parts[0].replace('data:image/', '');
-            let ext = mimeType.split('+')[0];
-            if (ext === 'jpeg') ext = 'jpg';
-            if (!ext) ext = 'png';
-            const base64Data = parts[1];
-            let buffer = Buffer.from(base64Data, 'base64');
-            
-            let skipSharp = false;
-            if (buffer.byteLength <= 100 * 1024 && forceSave) {
-              skipSharp = true;
-            }
-
-            if (!skipSharp) {
-              try {
-                const metadata = await sharp(buffer).metadata();
-                if (buffer.byteLength > 300 * 1024 || (metadata.width && metadata.width > 1200) || (metadata.height && metadata.height > 1200)) {
-                  buffer = await sharp(buffer)
-                    .resize({ width: 1200, height: 1200, fit: 'inside', withoutEnlargement: true })
-                    .jpeg({ quality: 80 })
-                    .toBuffer();
-                  ext = 'jpg';
-                }
-              } catch (sharpError) {
-                 if (!forceSave) throw new Error('SHARP_UNSUPPORTED_FORMAT');
-                 console.error("Sharp processing failed for base64:", sharpError);
-              }
-            }
-            
-            const filename = `${uuidv4()}.${ext}`;
-            const filepath = path.join(UPLOADS_DIR, filename);
-            await fs.promises.writeFile(filepath, buffer);
-            return filename;
-          })();
-
-          if (imageProcessingCache) imageProcessingCache.set(hashBase64, processPromise);
-
-          writePromises.push((async () => {
-            try {
-              const filename = await processPromise;
-              newRow[key] = isObject ? { ...value, data: filename } : filename;
-            } catch (err: any) {
-              if (imageProcessingCache) imageProcessingCache.delete(hashBase64);
-              if (err.message === 'SHARP_UNSUPPORTED_FORMAT') throw err;
-              console.error("Failed to process base64 image:", err);
-            }
-          })());
-        }
+        writePromises.push((async () => {
+          try {
+            const filename = await processPromise;
+            newRow[key] = isObject ? { ...value, data: filename } : filename;
+          } catch (err: any) {
+            if (err.message === 'SHARP_UNSUPPORTED_FORMAT') throw err;
+            console.error(`Failed to process image:`, err);
+          }
+        })());
       }
     }
   }
