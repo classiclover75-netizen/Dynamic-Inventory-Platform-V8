@@ -80,21 +80,31 @@ async function saveLocalDB(data: any) {
 }
 
 // Image Helpers
-async function processRowImages(row: any, forceSave = false) {
+async function processRowImages(row: any, forceSave = false, imageProcessingCache?: Map<string, Promise<string>>) {
   const newRow = { ...row };
   const writePromises: Promise<void>[] = [];
 
   for (const key in newRow) {
     const value = newRow[key];
     let imgVal = value;
-    if (typeof value === 'object' && value !== null && typeof value.data === 'string') {
+    const isObject = typeof value === 'object' && value !== null && typeof value.data === 'string';
+    if (isObject) {
       imgVal = value.data;
     }
 
     if (typeof imgVal === 'string') {
       if (/^https?:\/\//i.test(imgVal)) {
-        writePromises.push((async () => {
-          try {
+        if (imageProcessingCache && imageProcessingCache.has(imgVal)) {
+          writePromises.push((async () => {
+            try {
+              const filename = await imageProcessingCache.get(imgVal);
+              newRow[key] = isObject ? { ...value, data: filename } : filename;
+            } catch (err) {
+              console.error(`Failed to get cached URL image ${imgVal}:`, err);
+            }
+          })());
+        } else {
+          const processPromise = (async () => {
             const response = await fetch(imgVal);
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const arrayBuffer = await response.arrayBuffer();
@@ -132,15 +142,36 @@ async function processRowImages(row: any, forceSave = false) {
             const filename = `${uuidv4()}.${ext}`;
             const filepath = path.join(UPLOADS_DIR, filename);
             await fs.promises.writeFile(filepath, buffer);
-            newRow[key] = filename;
-          } catch (err: any) {
-            if (err.message === 'SHARP_UNSUPPORTED_FORMAT') throw err;
-            console.error(`Failed to process URL image ${imgVal}:`, err);
-          }
-        })());
+            return filename;
+          })();
+
+          if (imageProcessingCache) imageProcessingCache.set(imgVal, processPromise);
+
+          writePromises.push((async () => {
+            try {
+              const filename = await processPromise;
+              newRow[key] = isObject ? { ...value, data: filename } : filename;
+            } catch (err: any) {
+              if (imageProcessingCache) imageProcessingCache.delete(imgVal);
+              if (err.message === 'SHARP_UNSUPPORTED_FORMAT') throw err;
+              console.error(`Failed to process URL image ${imgVal}:`, err);
+            }
+          })());
+        }
       } else if (imgVal.startsWith('data:image/')) {
-        writePromises.push((async () => {
-          try {
+        const hashBase64 = imgVal; // Use the exact base64 data for deduplication
+
+        if (imageProcessingCache && imageProcessingCache.has(hashBase64)) {
+          writePromises.push((async () => {
+            try {
+              const filename = await imageProcessingCache.get(hashBase64);
+              newRow[key] = isObject ? { ...value, data: filename } : filename;
+            } catch (err) {
+              console.error("Failed to get cached base64 image:", err);
+            }
+          })());
+        } else {
+          const processPromise = (async () => {
             const parts = imgVal.split(';base64,');
             const mimeType = parts[0].replace('data:image/', '');
             let ext = mimeType.split('+')[0];
@@ -167,12 +198,22 @@ async function processRowImages(row: any, forceSave = false) {
             const filename = `${uuidv4()}.${ext}`;
             const filepath = path.join(UPLOADS_DIR, filename);
             await fs.promises.writeFile(filepath, buffer);
-            newRow[key] = filename;
-          } catch (err: any) {
-            if (err.message === 'SHARP_UNSUPPORTED_FORMAT') throw err;
-            console.error("Failed to process base64 image:", err);
-          }
-        })());
+            return filename;
+          })();
+
+          if (imageProcessingCache) imageProcessingCache.set(hashBase64, processPromise);
+
+          writePromises.push((async () => {
+            try {
+              const filename = await processPromise;
+              newRow[key] = isObject ? { ...value, data: filename } : filename;
+            } catch (err: any) {
+              if (imageProcessingCache) imageProcessingCache.delete(hashBase64);
+              if (err.message === 'SHARP_UNSUPPORTED_FORMAT') throw err;
+              console.error("Failed to process base64 image:", err);
+            }
+          })());
+        }
       }
     }
   }
@@ -180,17 +221,18 @@ async function processRowImages(row: any, forceSave = false) {
   return newRow;
 }
 
-async function processRowsConcurrently(rows: any[], limit = 50, forceSave = false) {
+async function processRowsConcurrently(rows: any[], limit = 50, forceSave = false, providedCache?: Map<string, Promise<string>>) {
+  const imageProcessingCache = providedCache || new Map<string, Promise<string>>();
   const results = [];
   for (let i = 0; i < rows.length; i += limit) {
     const chunk = rows.slice(i, i + limit);
-    const chunkResults = await Promise.all(chunk.map(r => processRowImages(r, forceSave)));
+    const chunkResults = await Promise.all(chunk.map(r => processRowImages(r, forceSave, imageProcessingCache)));
     results.push(...chunkResults);
   }
   return results;
 }
 
-function cleanupOrphanImages(oldRows: any[], newRows: any[]) {
+async function cleanupOrphanImages(oldRows: any[], newRows: any[]) {
   const oldFiles = new Set<string>();
   const newFiles = new Set<string>();
   const imageExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
@@ -218,8 +260,34 @@ function cleanupOrphanImages(oldRows: any[], newRows: any[]) {
   extractFiles(oldRows, oldFiles);
   extractFiles(newRows, newFiles);
 
+  const candidates = new Set<string>();
   oldFiles.forEach(file => {
     if (!newFiles.has(file)) {
+      candidates.add(file);
+    }
+  });
+
+  if (candidates.size === 0) return;
+
+  const otherUsedFiles = new Set<string>();
+  const oldRowIds = new Set(oldRows.map(r => String(r.id)));
+
+  if (isUsingMongoDB) {
+    const allRecords = await PageRow.find({});
+    const remainingRecords = allRecords.filter(r => !oldRowIds.has(String(r.data.id)));
+    extractFiles(remainingRecords.map(r => r.data), otherUsedFiles);
+  } else {
+    const db = await getLocalDB();
+    db.pages.forEach((p: any) => {
+      if (p.rows) {
+        const remainingRows = p.rows.filter((r: any) => !oldRowIds.has(String(r.id)));
+        extractFiles(remainingRows, otherUsedFiles);
+      }
+    });
+  }
+
+  candidates.forEach(file => {
+    if (!otherUsedFiles.has(file)) {
       try {
         const filepath = path.join(UPLOADS_DIR, file);
         if (fs.existsSync(filepath)) {
@@ -381,7 +449,7 @@ app.post('/api/admin/migrate-images', async (req, res) => {
         
         if (thisPageMigratedCount > 0) {
           migratedCount += thisPageMigratedCount;
-          cleanupOrphanImages(rows, newRows);
+          await cleanupOrphanImages(rows, newRows);
           await PageRow.deleteMany({ pageName });
           await PageRow.insertMany(newRows.map((r: any) => ({ pageName, data: r })));
         }
@@ -396,7 +464,7 @@ app.post('/api/admin/migrate-images', async (req, res) => {
         
         if (thisPageMigratedCount > 0) {
           migratedCount += thisPageMigratedCount;
-          cleanupOrphanImages(page.rows, newRows);
+          await cleanupOrphanImages(page.rows, newRows);
           page.rows = newRows;
         }
       }
@@ -808,9 +876,10 @@ app.put('/api/state', async (req, res) => {
     
     // Process all images in the new state
     const processedPageRows: Record<string, any[]> = {};
+    const imageProcessingCache = new Map<string, Promise<string>>(); // Deduplication cache across all pages
     if (newState.pageRows) {
       for (const pageName in newState.pageRows) {
-        processedPageRows[pageName] = await processRowsConcurrently(newState.pageRows[pageName], 50, true);
+        processedPageRows[pageName] = await processRowsConcurrently(newState.pageRows[pageName], 50, true, imageProcessingCache);
       }
     }
 
@@ -824,7 +893,7 @@ app.put('/api/state', async (req, res) => {
         allNewRows.push(...processedPageRows[pageName]);
       }
       
-      cleanupOrphanImages(allOldRows, allNewRows);
+      await cleanupOrphanImages(allOldRows, allNewRows);
 
       // Clear existing data
       await Page.deleteMany({});
@@ -871,7 +940,7 @@ app.put('/api/state', async (req, res) => {
       for (const pageName in processedPageRows) {
         allNewRows.push(...processedPageRows[pageName]);
       }
-      cleanupOrphanImages(allOldRows, allNewRows);
+      await cleanupOrphanImages(allOldRows, allNewRows);
 
       const newDb = {
         pages: newState.pages.map((name: string) => ({
