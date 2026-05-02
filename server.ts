@@ -909,6 +909,35 @@ app.put('/api/state', async (req, res) => {
   try {
     const newState = req.body;
     
+    // Repair tracker rows from source pages before processing
+    if (newState.pageConfigs && newState.pageRows) {
+      for (const [trackerName, trackerConfig] of Object.entries(newState.pageConfigs)) {
+        const config = trackerConfig as any;
+        if (config.linkedSourcePage && newState.pageRows[config.linkedSourcePage]) {
+          const sourceRows = newState.pageRows[config.linkedSourcePage];
+          // Use the first occurrence of an ID to build the map, in case of duplicates
+          const sourceRowsMap = new Map();
+          for (const r of sourceRows) {
+             if (r.id && !sourceRowsMap.has(String(r.id))) {
+                 sourceRowsMap.set(String(r.id), r);
+             }
+          }
+          
+          if (newState.pageRows[trackerName]) {
+            newState.pageRows[trackerName] = newState.pageRows[trackerName].map((trackerRow: any) => {
+              if (trackerRow.id) {
+                const sourceRow = sourceRowsMap.get(String(trackerRow.id));
+                if (sourceRow) {
+                  return { ...sourceRow, ...trackerRow };
+                }
+              }
+              return trackerRow;
+            });
+          }
+        }
+      }
+    }
+
     // Process all images in the new state
     const processedPageRows: Record<string, any[]> = {};
     const imageProcessingCache = new Map<string, Promise<string>>(); // Deduplication cache across all pages
