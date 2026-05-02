@@ -1710,19 +1710,8 @@ function AppContent() {
 
             updatedTracker = true;
           } else if (!wasEditing) {
-            const textCols =
-              state.pageConfigs[targetPage]?.columns.filter(
-                (c) => c.type === "text",
-              ) || [];
-            const itemNameKey =
-              textCols.length > 0
-                ? textCols[0].key
-                : Object.keys(newRow).find(
-                    (k) => typeof newRow[k] === "string" && k !== "id",
-                  ) || "id";
             const newTrackerRow = {
-              id: newRow.id,
-              item_name: newRow[itemNameKey] || `Item ${newRow.id}`,
+              ...newRow,
               total_qty: "0",
             };
             trackerRows.push(newTrackerRow);
